@@ -40,9 +40,14 @@ import ImageElement from './elements/ImageElement.vue'
 import BarcodeElement from './elements/BarcodeElement.vue'
 import QrcodeElement from './elements/QrcodeElement.vue'
 import TableElement from './elements/TableElement.vue'
-import JsBarcode from 'jsbarcode'
-import QRCode from 'qrcode'
 import { ElMessage } from 'element-plus'
+import {
+  getElementDisplayName,
+  loadImage,
+  drawImageContain,
+  renderBarcodeToCanvas,
+  renderQrcodeToCanvas
+} from '@/utils/element'
 
 const store = useCanvasStore()
 const canvasRef = ref(null)
@@ -128,29 +133,22 @@ const handleMouseMove = (e) => {
   const dy = (e.clientY - dragStartY) / store.scale
   const el = store.elements.find(el => el.id === currentElementId)
   if (!el) return
-  
+
   if (isDragging && currentElementId) {
-    // 限制不超出画布
-    let newX = Math.round(elementStartX + dx)
-    let newY = Math.round(elementStartY + dy)
-    newX = Math.max(0, Math.min(store.canvasPixelWidth - el.width, newX))
-    newY = Math.max(0, Math.min(store.canvasPixelHeight - el.height, newY))
-    store.updateElement(currentElementId, { x: newX, y: newY })
+    // 统一走 store 的钳制口径：按像素计算并限制在画布内
+    store.setElementGeometry(currentElementId, {
+      x: elementStartX + dx,
+      y: elementStartY + dy
+    })
   } else if (isResizing && currentElementId) {
     let newX = elementStartX, newY = elementStartY, newW = elementStartW, newH = elementStartH
-    
+
     if (currentHandle.includes('e')) newW = Math.max(10, elementStartW + dx)
     if (currentHandle.includes('w')) { newW = Math.max(10, elementStartW - dx); newX = elementStartX + dx }
     if (currentHandle.includes('s')) newH = Math.max(10, elementStartH + dy)
     if (currentHandle.includes('n')) { newH = Math.max(10, elementStartH - dy); newY = elementStartY + dy }
-    
-    // 限制不超出画布
-    newX = Math.max(0, Math.round(newX))
-    newY = Math.max(0, Math.round(newY))
-    newW = Math.min(store.canvasPixelWidth - newX, Math.round(newW))
-    newH = Math.min(store.canvasPixelHeight - newY, Math.round(newH))
-    
-    store.updateElement(currentElementId, { x: newX, y: newY, width: newW, height: newH })
+
+    store.setElementGeometry(currentElementId, { x: newX, y: newY, width: newW, height: newH })
   }
 }
 
@@ -192,15 +190,13 @@ const handleDrop = (e) => {
     }
     
     const size = defaultSize[item.type] || { width: 100, height: 40 }
-    
-    // 计算位置并限制在画布内
-    x = Math.max(0, Math.min(store.canvasPixelWidth - size.width, Math.round(x - size.width / 2)))
-    y = Math.max(0, Math.min(store.canvasPixelHeight - size.height, Math.round(y - size.height / 2)))
-    
+
+    // 位置与尺寸由 store.addElement 统一钳制在画布内，这里只计算期望落点
     store.addElement({
       type: item.type,
       ...item.defaultProps,
-      x, y,
+      x: Math.round(x - size.width / 2),
+      y: Math.round(y - size.height / 2),
       ...size
     })
   } catch (err) {
@@ -208,68 +204,93 @@ const handleDrop = (e) => {
   }
 }
 
+// 导出渲染：与画布 DOM 保持同一套口径
+// - 坐标/尺寸直接使用 store 中已钳制的像素值
+// - 旋转以元件中心为轴（与画布 CSS transform 一致）
+// - 内容裁剪到元件框内（与画布 overflow:hidden 一致）
+// 返回绘制失败的元件及原因
 const renderCanvas = async () => {
   await nextTick()
   const canvas = canvasRef.value
-  if (!canvas) return
+  if (!canvas) return []
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
-  
+
+  const failures = []
   for (const el of store.elements) {
     if (!el.visible) continue
     ctx.save()
     ctx.translate(el.x + el.width / 2, el.y + el.height / 2)
     if (el.rotation) ctx.rotate((el.rotation * Math.PI) / 180)
     ctx.translate(-el.width / 2, -el.height / 2)
-    await renderElement(ctx, el)
+    const result = await renderElement(ctx, el)
     ctx.restore()
+    if (result && !result.ok) {
+      failures.push({ name: getElementDisplayName(el), reason: result.reason })
+    }
   }
+  return failures
 }
 
+// 返回 { ok: true } 或 { ok: false, reason }
 const renderElement = async (ctx, el) => {
   switch (el.type) {
-    case 'text':
+    case 'text': {
+      // 与画布 DOM（flex 垂直居中、line-height:1）一致：垂直居中绘制
       ctx.fillStyle = el.color || '#000'
       ctx.font = `${el.italic ? 'italic ' : ''}${el.bold ? 'bold ' : ''}${el.fontSize || 14}px ${el.fontFamily || 'Arial'}`
-      ctx.textBaseline = 'top'
-      ctx.fillText(el.content || '', 0, 0)
-      break
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'
+      clipToElement(ctx, el)
+      ctx.fillText(el.content || '', 0, el.height / 2)
+      return { ok: true }
+    }
     case 'rect':
       if (el.fillColor && el.fillColor !== 'transparent') { ctx.fillStyle = el.fillColor; ctx.fillRect(0, 0, el.width, el.height) }
       if (el.strokeWidth) { ctx.strokeStyle = el.strokeColor || '#000'; ctx.lineWidth = el.strokeWidth; ctx.strokeRect(0, 0, el.width, el.height) }
-      break
+      return { ok: true }
     case 'circle':
       ctx.beginPath()
       ctx.ellipse(el.width / 2, el.height / 2, el.width / 2, el.height / 2, 0, 0, Math.PI * 2)
       if (el.fillColor && el.fillColor !== 'transparent') { ctx.fillStyle = el.fillColor; ctx.fill() }
       if (el.strokeWidth) { ctx.strokeStyle = el.strokeColor || '#000'; ctx.lineWidth = el.strokeWidth; ctx.stroke() }
-      break
+      return { ok: true }
     case 'line':
       ctx.beginPath(); ctx.moveTo(0, el.height / 2); ctx.lineTo(el.width, el.height / 2)
       ctx.strokeStyle = el.strokeColor || '#000'; ctx.lineWidth = el.strokeWidth || 2; ctx.stroke()
-      break
-    case 'image':
-      if (el.imageData) {
-        const img = new Image(); img.src = el.imageData
-        await new Promise(r => { img.onload = r; img.onerror = r })
-        ctx.drawImage(img, 0, 0, el.width, el.height)
+      return { ok: true }
+    case 'image': {
+      if (!el.imageData) return { ok: false, reason: '未设置图片' }
+      try {
+        const img = await loadImage(el.imageData)
+        clipToElement(ctx, el)
+        drawImageContain(ctx, img, 0, 0, el.width, el.height, true)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, reason: '图片加载失败' }
       }
-      break
-    case 'barcode':
+    }
+    case 'barcode': {
       try {
-        const bcCanvas = document.createElement('canvas')
-        JsBarcode(bcCanvas, el.content || '123456', { format: el.format || 'CODE128', displayValue: el.showText !== false })
-        ctx.drawImage(bcCanvas, 0, 0, el.width, el.height)
-      } catch (e) { console.error(e) }
-      break
-    case 'qrcode':
+        const bcCanvas = renderBarcodeToCanvas(el)
+        clipToElement(ctx, el)
+        drawImageContain(ctx, bcCanvas, 0, 0, el.width, el.height)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, reason: '条码内容不合法' }
+      }
+    }
+    case 'qrcode': {
       try {
-        const qrCanvas = document.createElement('canvas')
-        await QRCode.toCanvas(qrCanvas, el.content || 'https://example.com', { width: el.width, errorCorrectionLevel: el.errorLevel || 'M' })
-        ctx.drawImage(qrCanvas, 0, 0, el.width, el.height)
-      } catch (e) { console.error(e) }
-      break
+        const qrCanvas = await renderQrcodeToCanvas(el)
+        clipToElement(ctx, el)
+        drawImageContain(ctx, qrCanvas, 0, 0, el.width, el.height)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, reason: '二维码内容不合法' }
+      }
+    }
     case 'table': {
       const rows = el.rows || 3
       const cols = el.cols || 3
@@ -278,6 +299,7 @@ const renderElement = async (ctx, el) => {
       const cellW = el.width / cols
       const cellH = el.height / rows
       const padding = 4
+      clipToElement(ctx, el)
       ctx.strokeStyle = bc
       ctx.lineWidth = bw
       ctx.strokeRect(bw / 2, bw / 2, el.width - bw, el.height - bw)
@@ -313,9 +335,18 @@ const renderElement = async (ctx, el) => {
           }
         }
       }
-      break
+      return { ok: true }
     }
+    default:
+      return { ok: true }
   }
+}
+
+// 内容裁剪到元件框内，与画布 DOM 的 overflow:hidden 对齐
+const clipToElement = (ctx, el) => {
+  ctx.beginPath()
+  ctx.rect(0, 0, el.width, el.height)
+  ctx.clip()
 }
 
 const exportToBMP = (canvas, filename = 'label.bmp') => {
@@ -356,17 +387,27 @@ const exportToBMP = (canvas, filename = 'label.bmp') => {
 }
 
 const exportCanvas = async (type) => {
-  await renderCanvas()
+  // 空画布直接提示，不生成文件
+  if (store.elements.filter(el => el.visible).length === 0) {
+    ElMessage.info('画布为空，没有可导出的内容')
+    return
+  }
+  const failures = await renderCanvas()
   const canvas = canvasRef.value
+  if (!canvas) return
   if (type === 'bmp') {
     exportToBMP(canvas, 'label.bmp')
-    ElMessage.success('BMP 导出成功')
   } else {
     const link = document.createElement('a')
     link.href = canvas.toDataURL('image/png')
     link.download = 'label.png'
     link.click()
-    ElMessage.success('PNG 导出成功')
+  }
+  // 说明是哪一项没画出来
+  if (failures.length > 0) {
+    ElMessage.warning(`已导出，但以下元件未绘制：${failures.map(f => `${f.name}（${f.reason}）`).join('、')}`)
+  } else {
+    ElMessage.success(`${type.toUpperCase()} 导出成功`)
   }
 }
 

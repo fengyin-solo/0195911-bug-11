@@ -41,6 +41,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
+import { getElementDisplayName } from '@/utils/element'
 
 const store = useCanvasStore()
 
@@ -49,7 +50,7 @@ const elementTypes = [
   { type: 'rect', label: '矩形', icon: 'FullScreen', defaultProps: { fillColor: '#ffffff', strokeColor: '#000000', strokeWidth: 1 } },
   { type: 'circle', label: '圆形', icon: 'CircleCheck', defaultProps: { fillColor: '#ffffff', strokeColor: '#000000', strokeWidth: 1 } },
   { type: 'line', label: '线条', icon: 'Minus', defaultProps: { strokeColor: '#000000', strokeWidth: 2 } },
-  { type: 'image', label: '图片', icon: 'Picture', defaultProps: { src: 'https://picsum.photos/100/100' } },
+  { type: 'image', label: '图片', icon: 'Picture', defaultProps: {} },
   { type: 'barcode', label: '条码', icon: 'Postcard', defaultProps: { content: '123456789', format: 'CODE128', showText: true } },
   { type: 'qrcode', label: '二维码', icon: 'Grid', defaultProps: { content: 'https://example.com', errorLevel: 'M' } },
   { type: 'table', label: '表格', icon: 'Grid', defaultProps: { rows: 3, cols: 3, borderWidth: 1, borderColor: '#000000', cellFontSize: 12, cellFontFamily: 'Arial', cellFontColor: '#000000', cellTextAlign: 'center', cells: {} } }
@@ -67,10 +68,8 @@ const deleteElement = (id) => store.deleteElement(id)
 const toggleVisibility = (el) => store.updateElement(el.id, { visible: !el.visible })
 
 const getElementIcon = (type) => elementTypes.find(e => e.type === type)?.icon || 'Document'
-const getElementName = (el) => {
-  const names = { text: '文本', rect: '矩形', circle: '圆形', line: '线条', image: '图片', barcode: '条码', qrcode: '二维码', table: '表格' }
-  return names[el.type] || el.type
-}
+// 名称与属性面板共用同一份口径（store 生成的默认名或用户命名）
+const getElementName = (el) => getElementDisplayName(el)
 </script>
 
 <style lang="scss" scoped>

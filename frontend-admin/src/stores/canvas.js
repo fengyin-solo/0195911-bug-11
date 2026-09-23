@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { clampElementRect, getElementTypeName } from '@/utils/element'
 
 const MM_TO_DOT = 8
 
@@ -11,6 +12,8 @@ export const useCanvasStore = defineStore('canvas', () => {
   const selectedElementId = ref(null)
   const selectedElementIds = ref([])
   let elementIdCounter = 0
+  // 每种类型独立的命名序号，删除元件不重排，保证名称稳定
+  const nameCounters = {}
 
   const canvasPixelWidth = computed(() => canvasWidth.value * MM_TO_DOT)
   const canvasPixelHeight = computed(() => canvasHeight.value * MM_TO_DOT)
@@ -35,13 +38,23 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   function addElement(element) {
     const id = `element_${++elementIdCounter}`
+    // 新增时即按统一口径钳制在画布内
+    const rect = clampElementRect(
+      {
+        x: element.x ?? 10,
+        y: element.y ?? 10,
+        width: element.width || 100,
+        height: element.height || 30
+      },
+      canvasPixelWidth.value,
+      canvasPixelHeight.value
+    )
+    nameCounters[element.type] = (nameCounters[element.type] || 0) + 1
     const newElement = {
       id,
       ...element,
-      x: element.x || 10,
-      y: element.y || 10,
-      width: element.width || 100,
-      height: element.height || 30,
+      ...rect,
+      name: element.name || `${getElementTypeName(element.type)}${nameCounters[element.type]}`,
       rotation: element.rotation || 0,
       locked: false,
       visible: true
@@ -56,6 +69,27 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (index !== -1) {
       elements.value[index] = { ...elements.value[index], ...updates }
     }
+  }
+
+  // 位置/尺寸的唯一修改入口：按像素计算并限制在画布内
+  function setElementGeometry(id, updates) {
+    const el = elements.value.find(el => el.id === id)
+    if (!el) return
+    const rect = clampElementRect(
+      {
+        x: updates.x ?? el.x,
+        y: updates.y ?? el.y,
+        width: updates.width ?? el.width,
+        height: updates.height ?? el.height
+      },
+      canvasPixelWidth.value,
+      canvasPixelHeight.value
+    )
+    updateElement(id, rect)
+  }
+
+  function renameElement(id, name) {
+    updateElement(id, { name: (name || '').trim() || getElementTypeName(elements.value.find(el => el.id === id)?.type) })
   }
 
   function deleteElement(id) {
@@ -100,7 +134,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     selectedElementIds.value = []
   }
 
-  // 多选元件之间对齐
+  // 多选元件之间对齐（对齐结果同样走统一钳制口径）
   function alignElements(alignment) {
     const selected = selectedElements.value
     if (selected.length < 2) return
@@ -108,36 +142,36 @@ export const useCanvasStore = defineStore('canvas', () => {
     switch (alignment) {
       case 'left': {
         const minX = Math.min(...selected.map(el => el.x))
-        selected.forEach(el => updateElement(el.id, { x: minX }))
+        selected.forEach(el => setElementGeometry(el.id, { x: minX }))
         break
       }
       case 'right': {
         const maxRight = Math.max(...selected.map(el => el.x + el.width))
-        selected.forEach(el => updateElement(el.id, { x: maxRight - el.width }))
+        selected.forEach(el => setElementGeometry(el.id, { x: maxRight - el.width }))
         break
       }
       case 'center-h': {
         const minX = Math.min(...selected.map(el => el.x))
         const maxRight = Math.max(...selected.map(el => el.x + el.width))
         const centerX = (minX + maxRight) / 2
-        selected.forEach(el => updateElement(el.id, { x: Math.round(centerX - el.width / 2) }))
+        selected.forEach(el => setElementGeometry(el.id, { x: centerX - el.width / 2 }))
         break
       }
       case 'top': {
         const minY = Math.min(...selected.map(el => el.y))
-        selected.forEach(el => updateElement(el.id, { y: minY }))
+        selected.forEach(el => setElementGeometry(el.id, { y: minY }))
         break
       }
       case 'bottom': {
         const maxBottom = Math.max(...selected.map(el => el.y + el.height))
-        selected.forEach(el => updateElement(el.id, { y: maxBottom - el.height }))
+        selected.forEach(el => setElementGeometry(el.id, { y: maxBottom - el.height }))
         break
       }
       case 'center-v': {
         const minY = Math.min(...selected.map(el => el.y))
         const maxBottom = Math.max(...selected.map(el => el.y + el.height))
         const centerY = (minY + maxBottom) / 2
-        selected.forEach(el => updateElement(el.id, { y: Math.round(centerY - el.height / 2) }))
+        selected.forEach(el => setElementGeometry(el.id, { y: centerY - el.height / 2 }))
         break
       }
     }
@@ -149,10 +183,11 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     const newElement = {
       ...element,
-      x: Math.min(element.x + 20, canvasPixelWidth.value - element.width),
-      y: Math.min(element.y + 20, canvasPixelHeight.value - element.height)
+      x: element.x + 20,
+      y: element.y + 20
     }
     delete newElement.id
+    delete newElement.name
     return addElement(newElement)
   }
 
@@ -177,6 +212,8 @@ export const useCanvasStore = defineStore('canvas', () => {
     setScale,
     addElement,
     updateElement,
+    setElementGeometry,
+    renameElement,
     deleteElement,
     selectElement,
     clearSelection,

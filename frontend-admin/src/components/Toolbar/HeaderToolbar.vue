@@ -58,16 +58,17 @@ const applySize = () => {
   store.setCanvasSize(width.value, height.value)
   const newWidth = store.canvasPixelWidth
   const newHeight = store.canvasPixelHeight
-  
+
   if (store.elements.length > 0) {
     const scaleX = newWidth / oldWidth
     const scaleY = newHeight / oldHeight
     store.elements.forEach(el => {
-      store.updateElement(el.id, {
-        x: Math.round(el.x * scaleX),
-        y: Math.round(el.y * scaleY),
-        width: Math.round(el.width * scaleX),
-        height: Math.round(el.height * scaleY)
+      // 统一走 store 的钳制口径，缩放后不会超出画布
+      store.setElementGeometry(el.id, {
+        x: el.x * scaleX,
+        y: el.y * scaleY,
+        width: el.width * scaleX,
+        height: el.height * scaleY
       })
     })
   }

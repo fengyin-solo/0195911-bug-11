@@ -70,7 +70,7 @@ defineExpose({ startEdit })
 <style scoped>
 .text-element {
   width: 100%; height: 100%; display: flex; align-items: center;
-  user-select: none; overflow: hidden; white-space: nowrap;
+  user-select: none; overflow: hidden; white-space: nowrap; line-height: 1;
 }
 .text-input {
   width: 100%; height: 100%; border: none; outline: none;

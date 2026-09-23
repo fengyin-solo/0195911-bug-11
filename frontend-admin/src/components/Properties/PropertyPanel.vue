@@ -3,6 +3,14 @@
     <div class="section-title">属性设置</div>
     <div class="property-content" v-if="element">
       <el-form label-position="left" label-width="60px" size="small">
+        <!-- 元件信息：名称与层级列表保持一致 -->
+        <div class="property-group">
+          <div class="group-title">元件信息</div>
+          <el-form-item label="名称">
+            <el-input v-model="formData.name" @change="updateProp('name')" />
+          </el-form-item>
+        </div>
+
         <!-- 通用属性 -->
         <div class="property-group">
           <div class="group-title">位置与尺寸 <span class="hint">(单位: px, 不可超出画布)</span></div>
@@ -223,6 +231,7 @@ const maxWidth = computed(() => element.value ? store.canvasPixelWidth - element
 const maxHeight = computed(() => element.value ? store.canvasPixelHeight - element.value.y : store.canvasPixelHeight)
 
 const formData = reactive({
+  name: '',
   x: 0, y: 0, width: 100, height: 40, rotation: 0,
   content: '', fontSize: 14, fontFamily: 'Arial', color: '#000000', bold: false, italic: false,
   fillColor: '#ffffff', strokeColor: '#000000', strokeWidth: 1,
@@ -241,15 +250,17 @@ watch(element, (el) => {
 }, { immediate: true, deep: true })
 
 const updateProp = (key) => {
-  if (element.value) {
-    let value = formData[key]
-    // 确保不超出画布
-    if (key === 'x') value = Math.min(value, store.canvasPixelWidth - element.value.width)
-    if (key === 'y') value = Math.min(value, store.canvasPixelHeight - element.value.height)
-    if (key === 'width') value = Math.min(value, store.canvasPixelWidth - element.value.x)
-    if (key === 'height') value = Math.min(value, store.canvasPixelHeight - element.value.y)
-    store.updateElement(element.value.id, { [key]: value })
+  if (!element.value) return
+  // 位置/尺寸统一走 store 的钳制口径，不再本地各算一遍
+  if (['x', 'y', 'width', 'height'].includes(key)) {
+    store.setElementGeometry(element.value.id, { [key]: formData[key] })
+    return
   }
+  if (key === 'name') {
+    store.renameElement(element.value.id, formData.name)
+    return
+  }
+  store.updateElement(element.value.id, { [key]: formData[key] })
 }
 
 const handleImageUpload = (file) => {
@@ -257,6 +268,9 @@ const handleImageUpload = (file) => {
   reader.onload = (e) => {
     store.updateElement(element.value.id, { imageData: e.target.result })
     ElMessage.success('图片已上传')
+  }
+  reader.onerror = () => {
+    ElMessage.error('图片读取失败，请重新选择')
   }
   reader.readAsDataURL(file.raw)
 }

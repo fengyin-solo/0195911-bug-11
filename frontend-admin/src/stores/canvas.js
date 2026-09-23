@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { clampElementGeometry, normalizeRotation } from '@/utils/geometry'
 
 const MM_TO_DOT = 8
 
@@ -27,6 +28,10 @@ export const useCanvasStore = defineStore('canvas', () => {
   function setCanvasSize(width, height) {
     canvasWidth.value = width
     canvasHeight.value = height
+    // 画布尺寸变化后，所有元件重新按统一口径限制在画布内
+    elements.value.forEach(el => {
+      Object.assign(el, clampElementGeometry(el, canvasPixelWidth.value, canvasPixelHeight.value))
+    })
   }
 
   function setScale(newScale) {
@@ -35,14 +40,17 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   function addElement(element) {
     const id = `element_${++elementIdCounter}`
+    const clamped = clampElementGeometry({
+      x: element.x ?? 10,
+      y: element.y ?? 10,
+      width: element.width ?? 100,
+      height: element.height ?? 30,
+      rotation: element.rotation ?? 0
+    }, canvasPixelWidth.value, canvasPixelHeight.value)
     const newElement = {
       id,
       ...element,
-      x: element.x || 10,
-      y: element.y || 10,
-      width: element.width || 100,
-      height: element.height || 30,
-      rotation: element.rotation || 0,
+      ...clamped,
       locked: false,
       visible: true
     }
@@ -51,11 +59,20 @@ export const useCanvasStore = defineStore('canvas', () => {
     return id
   }
 
+  // 几何字段由 geometry.js 统一计算并限制，任何更新路径都走这一个口径
+  const GEOMETRY_KEYS = ['x', 'y', 'width', 'height', 'rotation']
+
   function updateElement(id, updates) {
     const index = elements.value.findIndex(el => el.id === id)
-    if (index !== -1) {
-      elements.value[index] = { ...elements.value[index], ...updates }
+    if (index === -1) return
+    const current = elements.value[index]
+    if (GEOMETRY_KEYS.some(key => key in updates)) {
+      updates = {
+        ...updates,
+        ...clampElementGeometry({ ...current, ...updates }, canvasPixelWidth.value, canvasPixelHeight.value)
+      }
     }
+    elements.value[index] = { ...current, ...updates }
   }
 
   function deleteElement(id) {
@@ -63,7 +80,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (index !== -1) {
       elements.value.splice(index, 1)
       selectedElementIds.value = selectedElementIds.value.filter(eid => eid !== id)
-      
+
       // 删除后选中第一个元件
       if (elements.value.length > 0) {
         const firstElement = elements.value[elements.value.length - 1]
@@ -100,7 +117,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     selectedElementIds.value = []
   }
 
-  // 多选元件之间对齐
+  // 多选元件之间对齐（以未旋转包围盒为准，对齐后统一限制回画布内）
   function alignElements(alignment) {
     const selected = selectedElements.value
     if (selected.length < 2) return
@@ -120,7 +137,7 @@ export const useCanvasStore = defineStore('canvas', () => {
         const minX = Math.min(...selected.map(el => el.x))
         const maxRight = Math.max(...selected.map(el => el.x + el.width))
         const centerX = (minX + maxRight) / 2
-        selected.forEach(el => updateElement(el.id, { x: Math.round(centerX - el.width / 2) }))
+        selected.forEach(el => updateElement(el.id, { x: centerX - el.width / 2 }))
         break
       }
       case 'top': {
@@ -137,7 +154,7 @@ export const useCanvasStore = defineStore('canvas', () => {
         const minY = Math.min(...selected.map(el => el.y))
         const maxBottom = Math.max(...selected.map(el => el.y + el.height))
         const centerY = (minY + maxBottom) / 2
-        selected.forEach(el => updateElement(el.id, { y: Math.round(centerY - el.height / 2) }))
+        selected.forEach(el => updateElement(el.id, { y: centerY - el.height / 2 }))
         break
       }
     }
@@ -149,8 +166,8 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     const newElement = {
       ...element,
-      x: Math.min(element.x + 20, canvasPixelWidth.value - element.width),
-      y: Math.min(element.y + 20, canvasPixelHeight.value - element.height)
+      x: element.x + 20,
+      y: element.y + 20
     }
     delete newElement.id
     return addElement(newElement)
@@ -183,6 +200,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     alignElements,
     duplicateElement,
     clearCanvas,
-    MM_TO_DOT
+    MM_TO_DOT,
+    normalizeRotation
   }
 })

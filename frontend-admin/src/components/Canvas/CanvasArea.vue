@@ -4,8 +4,8 @@
       <div class="canvas-container" :style="canvasContainerStyle">
         <canvas ref="canvasRef" :width="store.canvasPixelWidth" :height="store.canvasPixelHeight" class="export-canvas" />
         <div class="edit-area">
-          <div 
-            v-for="element in visibleElements" 
+          <div
+            v-for="element in visibleElements"
             :key="element.id"
             class="canvas-element"
             :class="{ selected: isSelected(element.id), 'multi-selected': isMultiSelected(element.id) }"
@@ -40,9 +40,9 @@ import ImageElement from './elements/ImageElement.vue'
 import BarcodeElement from './elements/BarcodeElement.vue'
 import QrcodeElement from './elements/QrcodeElement.vue'
 import TableElement from './elements/TableElement.vue'
-import JsBarcode from 'jsbarcode'
-import QRCode from 'qrcode'
 import { ElMessage } from 'element-plus'
+import { ELEMENT_TYPES } from '@/utils/elementMeta'
+import { renderLabel } from '@/utils/canvasRenderer'
 
 const store = useCanvasStore()
 const canvasRef = ref(null)
@@ -128,28 +128,22 @@ const handleMouseMove = (e) => {
   const dy = (e.clientY - dragStartY) / store.scale
   const el = store.elements.find(el => el.id === currentElementId)
   if (!el) return
-  
+
   if (isDragging && currentElementId) {
-    // 限制不超出画布
-    let newX = Math.round(elementStartX + dx)
-    let newY = Math.round(elementStartY + dy)
-    newX = Math.max(0, Math.min(store.canvasPixelWidth - el.width, newX))
-    newY = Math.max(0, Math.min(store.canvasPixelHeight - el.height, newY))
-    store.updateElement(currentElementId, { x: newX, y: newY })
+    // 统一口径：store 按像素计算并限制在画布内（含旋转包围盒）
+    store.updateElement(currentElementId, {
+      x: elementStartX + dx,
+      y: elementStartY + dy
+    })
   } else if (isResizing && currentElementId) {
     let newX = elementStartX, newY = elementStartY, newW = elementStartW, newH = elementStartH
-    
-    if (currentHandle.includes('e')) newW = Math.max(10, elementStartW + dx)
-    if (currentHandle.includes('w')) { newW = Math.max(10, elementStartW - dx); newX = elementStartX + dx }
-    if (currentHandle.includes('s')) newH = Math.max(10, elementStartH + dy)
-    if (currentHandle.includes('n')) { newH = Math.max(10, elementStartH - dy); newY = elementStartY + dy }
-    
-    // 限制不超出画布
-    newX = Math.max(0, Math.round(newX))
-    newY = Math.max(0, Math.round(newY))
-    newW = Math.min(store.canvasPixelWidth - newX, Math.round(newW))
-    newH = Math.min(store.canvasPixelHeight - newY, Math.round(newH))
-    
+
+    if (currentHandle.includes('e')) newW = elementStartW + dx
+    if (currentHandle.includes('w')) { newW = elementStartW - dx; newX = elementStartX + dx }
+    if (currentHandle.includes('s')) newH = elementStartH + dy
+    if (currentHandle.includes('n')) { newH = elementStartH - dy; newY = elementStartY + dy }
+
+    // 统一口径：最小尺寸与画布限制由 store 处理
     store.updateElement(currentElementId, { x: newX, y: newY, width: newW, height: newH })
   }
 }
@@ -172,150 +166,39 @@ const handleDrop = (e) => {
   e.stopPropagation()
   const data = e.dataTransfer.getData('application/json')
   if (!data) return
-  
+
   try {
     const item = JSON.parse(data)
+    const meta = ELEMENT_TYPES.find(t => t.type === item.type)
+    if (!meta) return
     const container = wrapperRef.value.querySelector('.canvas-container')
     const rect = container.getBoundingClientRect()
-    let x = (e.clientX - rect.left) / store.scale
-    let y = (e.clientY - rect.top) / store.scale
-    
-    const defaultSize = {
-      text: { width: 100, height: 24 },
-      rect: { width: 80, height: 60 },
-      circle: { width: 60, height: 60 },
-      line: { width: 100, height: 4 },
-      image: { width: 80, height: 80 },
-      barcode: { width: 150, height: 60 },
-      qrcode: { width: 80, height: 80 },
-      table: { width: 200, height: 120 }
-    }
-    
-    const size = defaultSize[item.type] || { width: 100, height: 40 }
-    
-    // 计算位置并限制在画布内
-    x = Math.max(0, Math.min(store.canvasPixelWidth - size.width, Math.round(x - size.width / 2)))
-    y = Math.max(0, Math.min(store.canvasPixelHeight - size.height, Math.round(y - size.height / 2)))
-    
+    const x = (e.clientX - rect.left) / store.scale
+    const y = (e.clientY - rect.top) / store.scale
+
+    // 以落点为中心，统一口径限制在画布内
     store.addElement({
       type: item.type,
-      ...item.defaultProps,
-      x, y,
-      ...size
+      ...meta.defaultProps,
+      x: x - meta.defaultSize.width / 2,
+      y: y - meta.defaultSize.height / 2,
+      ...meta.defaultSize
     })
   } catch (err) {
     console.error('Drop error:', err)
   }
 }
 
+// ---------------------------------------------------------------------------
+// 导出渲染统一走 utils/canvasRenderer.js，与画布 DOM 使用同一套像素口径。
+// ---------------------------------------------------------------------------
+
 const renderCanvas = async () => {
   await nextTick()
   const canvas = canvasRef.value
-  if (!canvas) return
+  if (!canvas) return []
   const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-  
-  for (const el of store.elements) {
-    if (!el.visible) continue
-    ctx.save()
-    ctx.translate(el.x + el.width / 2, el.y + el.height / 2)
-    if (el.rotation) ctx.rotate((el.rotation * Math.PI) / 180)
-    ctx.translate(-el.width / 2, -el.height / 2)
-    await renderElement(ctx, el)
-    ctx.restore()
-  }
-}
-
-const renderElement = async (ctx, el) => {
-  switch (el.type) {
-    case 'text':
-      ctx.fillStyle = el.color || '#000'
-      ctx.font = `${el.italic ? 'italic ' : ''}${el.bold ? 'bold ' : ''}${el.fontSize || 14}px ${el.fontFamily || 'Arial'}`
-      ctx.textBaseline = 'top'
-      ctx.fillText(el.content || '', 0, 0)
-      break
-    case 'rect':
-      if (el.fillColor && el.fillColor !== 'transparent') { ctx.fillStyle = el.fillColor; ctx.fillRect(0, 0, el.width, el.height) }
-      if (el.strokeWidth) { ctx.strokeStyle = el.strokeColor || '#000'; ctx.lineWidth = el.strokeWidth; ctx.strokeRect(0, 0, el.width, el.height) }
-      break
-    case 'circle':
-      ctx.beginPath()
-      ctx.ellipse(el.width / 2, el.height / 2, el.width / 2, el.height / 2, 0, 0, Math.PI * 2)
-      if (el.fillColor && el.fillColor !== 'transparent') { ctx.fillStyle = el.fillColor; ctx.fill() }
-      if (el.strokeWidth) { ctx.strokeStyle = el.strokeColor || '#000'; ctx.lineWidth = el.strokeWidth; ctx.stroke() }
-      break
-    case 'line':
-      ctx.beginPath(); ctx.moveTo(0, el.height / 2); ctx.lineTo(el.width, el.height / 2)
-      ctx.strokeStyle = el.strokeColor || '#000'; ctx.lineWidth = el.strokeWidth || 2; ctx.stroke()
-      break
-    case 'image':
-      if (el.imageData) {
-        const img = new Image(); img.src = el.imageData
-        await new Promise(r => { img.onload = r; img.onerror = r })
-        ctx.drawImage(img, 0, 0, el.width, el.height)
-      }
-      break
-    case 'barcode':
-      try {
-        const bcCanvas = document.createElement('canvas')
-        JsBarcode(bcCanvas, el.content || '123456', { format: el.format || 'CODE128', displayValue: el.showText !== false })
-        ctx.drawImage(bcCanvas, 0, 0, el.width, el.height)
-      } catch (e) { console.error(e) }
-      break
-    case 'qrcode':
-      try {
-        const qrCanvas = document.createElement('canvas')
-        await QRCode.toCanvas(qrCanvas, el.content || 'https://example.com', { width: el.width, errorCorrectionLevel: el.errorLevel || 'M' })
-        ctx.drawImage(qrCanvas, 0, 0, el.width, el.height)
-      } catch (e) { console.error(e) }
-      break
-    case 'table': {
-      const rows = el.rows || 3
-      const cols = el.cols || 3
-      const bw = el.borderWidth || 1
-      const bc = el.borderColor || '#000000'
-      const cellW = el.width / cols
-      const cellH = el.height / rows
-      const padding = 4
-      ctx.strokeStyle = bc
-      ctx.lineWidth = bw
-      ctx.strokeRect(bw / 2, bw / 2, el.width - bw, el.height - bw)
-      for (let r = 1; r < rows; r++) {
-        ctx.beginPath()
-        ctx.moveTo(0, r * cellH)
-        ctx.lineTo(el.width, r * cellH)
-        ctx.stroke()
-      }
-      for (let c = 1; c < cols; c++) {
-        ctx.beginPath()
-        ctx.moveTo(c * cellW, 0)
-        ctx.lineTo(c * cellW, el.height)
-        ctx.stroke()
-      }
-      const fontSize = el.cellFontSize || 12
-      const fontFamily = el.cellFontFamily || 'Arial'
-      const textAlign = el.cellTextAlign || 'center'
-      ctx.fillStyle = el.cellFontColor || '#000000'
-      ctx.font = `${fontSize}px ${fontFamily}`
-      ctx.textAlign = textAlign
-      ctx.textBaseline = 'middle'
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const text = (el.cells && el.cells[r] && el.cells[r][c]) || ''
-          if (text) {
-            let x
-            if (textAlign === 'left') x = c * cellW + padding
-            else if (textAlign === 'right') x = (c + 1) * cellW - padding
-            else x = c * cellW + cellW / 2
-            const y = r * cellH + cellH / 2
-            ctx.fillText(text, x, y)
-          }
-        }
-      }
-      break
-    }
-  }
+  return renderLabel(ctx, store.elements, canvas.width, canvas.height)
 }
 
 const exportToBMP = (canvas, filename = 'label.bmp') => {
@@ -355,19 +238,28 @@ const exportToBMP = (canvas, filename = 'label.bmp') => {
   link.href = URL.createObjectURL(blob); link.download = filename; link.click()
 }
 
+const reportWarnings = (warnings, type) => {
+  if (warnings.length === 0) {
+    ElMessage.success(type === 'bmp' ? 'BMP 导出成功' : 'PNG 导出成功')
+  } else {
+    ElMessage.warning(`已导出，${warnings.join('；')}`)
+  }
+}
+
 const exportCanvas = async (type) => {
-  await renderCanvas()
+  // 空画布也正常导出（白底图），不报错
+  const warnings = await renderCanvas()
   const canvas = canvasRef.value
+  if (!canvas) return
   if (type === 'bmp') {
     exportToBMP(canvas, 'label.bmp')
-    ElMessage.success('BMP 导出成功')
   } else {
     const link = document.createElement('a')
     link.href = canvas.toDataURL('image/png')
     link.download = 'label.png'
     link.click()
-    ElMessage.success('PNG 导出成功')
   }
+  reportWarnings(warnings, type)
 }
 
 defineExpose({ exportCanvas })
@@ -387,11 +279,13 @@ defineExpose({ exportCanvas })
 .export-canvas { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
 .edit-area { position: relative; width: 100%; height: 100%; }
 
+// 选中框使用 outline，不占据布局像素，保证画布显示位置与导出像素一致
 .canvas-element {
-  position: absolute; cursor: move; border: 1px solid transparent; box-sizing: border-box;
-  &:hover { border-color: #409eff; }
-  &.selected { border-color: #409eff; border-width: 2px; }
-  &.multi-selected { border-color: #67c23a; border-width: 2px; }
+  position: absolute; cursor: move; box-sizing: border-box;
+  outline: 1px solid transparent; outline-offset: -1px;
+  &:hover { outline-color: #409eff; }
+  &.selected { outline: 2px solid #409eff; outline-offset: -2px; }
+  &.multi-selected { outline: 2px solid #67c23a; outline-offset: -2px; }
 }
 
 .resize-handles .resize-handle {

@@ -2,15 +2,19 @@
   <div class="property-panel card">
     <div class="section-title">属性设置</div>
     <div class="property-content" v-if="element">
+      <div class="element-name">
+        <el-icon :size="16"><component :is="elementIcon" /></el-icon>
+        <span>{{ elementDisplayName }}</span>
+      </div>
       <el-form label-position="left" label-width="60px" size="small">
         <!-- 通用属性 -->
         <div class="property-group">
-          <div class="group-title">位置与尺寸 <span class="hint">(单位: px, 不可超出画布)</span></div>
+          <div class="group-title">位置与尺寸 <span class="hint">(单位: px, 按像素计算并限制在画布内)</span></div>
           <el-form-item label="X">
-            <el-input-number v-model="formData.x" :min="0" :max="maxX" controls-position="right" @change="updateProp('x')" />
+            <el-input-number v-model="formData.x" :min="limits.minX" :max="limits.maxX" controls-position="right" @change="updateProp('x')" />
           </el-form-item>
           <el-form-item label="Y">
-            <el-input-number v-model="formData.y" :min="0" :max="maxY" controls-position="right" @change="updateProp('y')" />
+            <el-input-number v-model="formData.y" :min="limits.minY" :max="limits.maxY" controls-position="right" @change="updateProp('y')" />
           </el-form-item>
           <el-form-item label="宽度">
             <el-input-number v-model="formData.width" :min="10" :max="maxWidth" controls-position="right" @change="updateProp('width')" />
@@ -19,7 +23,7 @@
             <el-input-number v-model="formData.height" :min="10" :max="maxHeight" controls-position="right" @change="updateProp('height')" />
           </el-form-item>
           <el-form-item label="旋转">
-            <el-input-number v-model="formData.rotation" :min="0" :max="360" :step="15" controls-position="right" @change="updateProp('rotation')" />
+            <el-input-number v-model="formData.rotation" :min="0" :max="359" :step="15" controls-position="right" @change="updateProp('rotation')" />
             <span class="unit">°</span>
           </el-form-item>
         </div>
@@ -196,6 +200,8 @@
 import { computed, reactive, watch } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
 import { ElMessage } from 'element-plus'
+import { ELEMENT_TYPES, getElementName } from '@/utils/elementMeta'
+import { positionLimits } from '@/utils/geometry'
 
 const barcodeFormats = [
   { value: 'CODE128', label: 'Code 128' },
@@ -216,11 +222,19 @@ const element = computed(() => store.selectedElement)
 const canAlign = computed(() => store.selectedElementIds.length >= 2)
 const fonts = ['Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana', 'Microsoft YaHei', 'SimSun', 'SimHei']
 
-// 计算最大值限制
-const maxX = computed(() => element.value ? store.canvasPixelWidth - element.value.width : store.canvasPixelWidth)
-const maxY = computed(() => element.value ? store.canvasPixelHeight - element.value.height : store.canvasPixelHeight)
-const maxWidth = computed(() => element.value ? store.canvasPixelWidth - element.value.x : store.canvasPixelWidth)
-const maxHeight = computed(() => element.value ? store.canvasPixelHeight - element.value.y : store.canvasPixelHeight)
+// 属性栏名称与图层列表共用同一份口径
+const elementDisplayName = computed(() => {
+  if (!element.value) return ''
+  return getElementName(element.value, store.elements.indexOf(element.value))
+})
+const elementIcon = computed(() => ELEMENT_TYPES.find(t => t.type === element.value?.type)?.icon || 'Document')
+
+// 位置与尺寸的范围统一由 geometry 口径计算，面板不再各算一遍
+const limits = computed(() => element.value
+  ? positionLimits(element.value, store.canvasPixelWidth, store.canvasPixelHeight)
+  : { minX: 0, maxX: 0, minY: 0, maxY: 0 })
+const maxWidth = computed(() => element.value ? store.canvasPixelWidth : store.canvasPixelWidth)
+const maxHeight = computed(() => element.value ? store.canvasPixelHeight : store.canvasPixelHeight)
 
 const formData = reactive({
   x: 0, y: 0, width: 100, height: 40, rotation: 0,
@@ -242,13 +256,9 @@ watch(element, (el) => {
 
 const updateProp = (key) => {
   if (element.value) {
-    let value = formData[key]
-    // 确保不超出画布
-    if (key === 'x') value = Math.min(value, store.canvasPixelWidth - element.value.width)
-    if (key === 'y') value = Math.min(value, store.canvasPixelHeight - element.value.height)
-    if (key === 'width') value = Math.min(value, store.canvasPixelWidth - element.value.x)
-    if (key === 'height') value = Math.min(value, store.canvasPixelHeight - element.value.y)
-    store.updateElement(element.value.id, { [key]: value })
+    // 像素位置/尺寸/旋转的限制统一由 store 按 geometry 口径处理；
+    // 规范化后的值经 watch(element) 回填表单，三处显示保持一致
+    store.updateElement(element.value.id, { [key]: formData[key] })
   }
 }
 
@@ -326,6 +336,13 @@ const remove = () => {
 <style lang="scss" scoped>
 .property-panel { width: 260px; display: flex; flex-direction: column; overflow: hidden; }
 .property-content { flex: 1; overflow-y: auto; padding: 12px; }
+
+.element-name {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; margin-bottom: 10px;
+  background: #ecf5ff; color: #409eff; border-radius: 4px;
+  font-size: 13px; font-weight: 600;
+}
 
 .property-group {
   margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #ebeef5;

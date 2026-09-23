@@ -32,7 +32,9 @@ const textStyle = computed(() => ({
   fontFamily: props.element.fontFamily || 'Arial',
   color: props.element.color || '#000000',
   fontWeight: props.element.bold ? 'bold' : 'normal',
-  fontStyle: props.element.italic ? 'italic' : 'normal'
+  fontStyle: props.element.italic ? 'italic' : 'normal',
+  // line-height:1 时用 flex 做墨迹垂直居中，与导出口径像素一致
+  lineHeight: '1'
 }))
 
 const inputStyle = computed(() => ({
@@ -40,7 +42,8 @@ const inputStyle = computed(() => ({
   fontFamily: props.element.fontFamily || 'Arial',
   color: props.element.color || '#000000',
   fontWeight: props.element.bold ? 'bold' : 'normal',
-  fontStyle: props.element.italic ? 'italic' : 'normal'
+  fontStyle: props.element.italic ? 'italic' : 'normal',
+  lineHeight: '1'
 }))
 
 const startEdit = async () => {
